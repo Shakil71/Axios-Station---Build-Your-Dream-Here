@@ -1,5 +1,5 @@
 import "dotenv/config";
-import { defineConfig, env } from "prisma/config";
+import { defineConfig } from "prisma/config";
 
 export default defineConfig({
   schema: "prisma/schema.prisma",
@@ -8,6 +8,8 @@ export default defineConfig({
     seed: "tsx prisma/seed.ts",
   },
   datasource: {
-    url: env("DATABASE_URL"),
+    // `prisma generate` (run on every install, e.g. on Vercel) does not connect to the database,
+    // so it must not fail when DATABASE_URL is missing. Migrations and the seed still need the real value.
+    url: process.env.DATABASE_URL ?? "mysql://placeholder@localhost:3306/placeholder",
   },
 });
