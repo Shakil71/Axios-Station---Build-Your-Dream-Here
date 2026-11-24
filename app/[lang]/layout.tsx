@@ -4,6 +4,7 @@ import { SiteHeader } from "@/components/layout/site-header";
 import { SiteFooter } from "@/components/layout/site-footer";
 import { Analytics } from "@/components/layout/analytics";
 import { Analytics as VercelAnalytics } from "@vercel/analytics/next";
+import { SpeedInsights } from "@vercel/speed-insights/next";
 import { LocaleProvider } from "@/components/i18n/locale-provider";
 import { getNavigation, getSettings, listServices } from "@/services/public";
 import { bool, str } from "@/lib/settings-schema";
@@ -49,8 +50,13 @@ export default async function PublicLayout({ children, params }: LayoutProps<"/[
         <SiteFooter />
         <OrganizationJsonLd settings={settings} services={services.map((s) => s.title)} />
         <Analytics gaId={str(settings, "analytics.gaMeasurementId")} internal={bool(settings, "analytics.internalPageViews")} />
-        {/* Vercel Web Analytics (cookieless page views). Only on Vercel: its script does not exist on other hosts or locally. */}
-        {process.env.VERCEL === "1" && <VercelAnalytics />}
+        {/* Vercel Web Analytics + Speed Insights (cookieless). Only on Vercel: their scripts do not exist on other hosts or locally. */}
+        {process.env.VERCEL === "1" && (
+          <>
+            <VercelAnalytics />
+            <SpeedInsights />
+          </>
+        )}
       </div>
     </LocaleProvider>
   );
