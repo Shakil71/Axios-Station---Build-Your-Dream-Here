@@ -1,0 +1,6 @@
+# Store text files with LF line endings (shell scripts must run on Linux servers).
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.webp binary
+*.ico binary

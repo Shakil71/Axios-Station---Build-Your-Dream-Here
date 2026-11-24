@@ -1,0 +1,711 @@
+// Axios Station — database schema (MySQL 8+, Prisma 7)
+
+generator client {
+  provider = "prisma-client"
+  output   = "../lib/generated/prisma"
+}
+
+datasource db {
+  provider = "mysql"
+}
+
+// ─────────────────────────────────────────────────────────────
+// Enums
+// ─────────────────────────────────────────────────────────────
+
+enum ContentStatus {
+  DRAFT
+  PUBLISHED
+  SCHEDULED
+  ARCHIVED
+}
+
+enum LeadStatus {
+  NEW
+  CONTACTED
+  QUALIFIED
+  PROPOSAL_SENT
+  NEGOTIATION
+  WON
+  LOST
+}
+
+enum ContactMethod {
+  EMAIL
+  PHONE
+  WHATSAPP
+  ANY
+}
+
+enum SubscriberStatus {
+  SUBSCRIBED
+  UNSUBSCRIBED
+}
+
+enum MediaKind {
+  IMAGE
+  DOCUMENT
+}
+
+// ─────────────────────────────────────────────────────────────
+// Identity & access control
+// ─────────────────────────────────────────────────────────────
+
+model User {
+  id               String    @id @default(cuid())
+  email            String    @unique @db.VarChar(191)
+  name             String    @db.VarChar(120)
+  passwordHash     String    @db.VarChar(255)
+  isActive         Boolean   @default(true)
+  failedLoginCount Int       @default(0)
+  lockedUntil      DateTime?
+  lastLoginAt      DateTime?
+  lastLoginIp      String?   @db.VarChar(64)
+  sessionVersion   Int       @default(0)
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+  deletedAt        DateTime?
+
+  roles          UserRole[]
+  activityLogs   ActivityLog[]
+  authoredPosts  BlogPost[]           @relation("PostAuthor")
+  assignedLeads  ContactInquiry[]     @relation("LeadAssignee")
+  leadNotes      LeadNote[]
+  passwordResets PasswordResetToken[]
+  uploadedMedia  Media[]              @relation("MediaUploader")
+
+  @@index([deletedAt])
+}
+
+model Role {
+  id          String   @id @default(cuid())
+  key         String   @unique @db.VarChar(64)
+  name        String   @db.VarChar(120)
+  description String?  @db.VarChar(255)
+  isSystem    Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  users       UserRole[]
+  permissions RolePermission[]
+}
+
+model Permission {
+  id          String  @id @default(cuid())
+  key         String  @unique @db.VarChar(100)
+  description String? @db.VarChar(255)
+  group       String  @db.VarChar(64)
+
+  roles RolePermission[]
+}
+
+model UserRole {
+  userId    String
+  roleId    String
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@id([userId, roleId])
+  @@index([roleId])
+}
+
+model RolePermission {
+  roleId       String
+  permissionId String
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+  @@index([permissionId])
+}
+
+model PasswordResetToken {
+  id        String    @id @default(cuid())
+  userId    String
+  tokenHash String    @unique @db.VarChar(128)
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model LoginAttempt {
+  id        String   @id @default(cuid())
+  email     String   @db.VarChar(191)
+  ip        String?  @db.VarChar(64)
+  success   Boolean
+  reason    String?  @db.VarChar(120)
+  createdAt DateTime @default(now())
+
+  @@index([email, createdAt])
+  @@index([createdAt])
+}
+
+// ─────────────────────────────────────────────────────────────
+// Media
+// ─────────────────────────────────────────────────────────────
+
+model Media {
+  id           String    @id @default(cuid())
+  kind         MediaKind
+  storage      String    @db.VarChar(16) // local | s3
+  storageKey   String    @unique @db.VarChar(255)
+  url          String    @db.VarChar(512)
+  originalName String    @db.VarChar(255)
+  mimeType     String    @db.VarChar(100)
+  sizeBytes    Int
+  width        Int?
+  height       Int?
+  altText      String?   @db.VarChar(255)
+  title        String?   @db.VarChar(255)
+  caption      String?   @db.Text
+  uploadedById String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  uploadedBy         User?          @relation("MediaUploader", fields: [uploadedById], references: [id], onDelete: SetNull)
+  serviceCovers      Service[]
+  solutionCovers     Solution[]
+  industryCovers     Industry[]
+  projectCovers      Project[]
+  projectImages      ProjectImage[]
+  teamPhotos         TeamMember[]
+  postCovers         BlogPost[]
+  testimonialAvatars Testimonial[]
+  sectionImages      PageSection[]
+
+  @@index([kind, createdAt])
+  @@index([originalName])
+}
+
+// ─────────────────────────────────────────────────────────────
+// Pages & homepage builder
+// ─────────────────────────────────────────────────────────────
+
+model Page {
+  id        String        @id @default(cuid())
+  key       String        @unique @db.VarChar(64) // home, about, contact, custom slug…
+  slug      String        @unique @db.VarChar(191)
+  title     String        @db.VarChar(191)
+  summary   String?       @db.Text
+  body      String?       @db.LongText
+  status    ContentStatus @default(DRAFT)
+  isSystem  Boolean       @default(false)
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+  deletedAt DateTime?
+
+  sections PageSection[]
+
+  @@index([status])
+}
+
+model PageSection {
+  id          String   @id @default(cuid())
+  pageId      String
+  type        String   @db.VarChar(64) // hero, intro, services, process, stats, cta…
+  title       String?  @db.VarChar(255)
+  subtitle    String?  @db.VarChar(255)
+  description String?  @db.Text
+  ctaLabel    String?  @db.VarChar(120)
+  ctaHref     String?  @db.VarChar(255)
+  cta2Label   String?  @db.VarChar(120)
+  cta2Href    String?  @db.VarChar(255)
+  imageId     String?
+  data        Json?
+  isEnabled   Boolean  @default(true)
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  page  Page   @relation(fields: [pageId], references: [id], onDelete: Cascade)
+  image Media? @relation(fields: [imageId], references: [id], onDelete: Restrict)
+
+  @@index([pageId, sortOrder])
+}
+
+// ─────────────────────────────────────────────────────────────
+// Offerings: services, solutions, industries
+// ─────────────────────────────────────────────────────────────
+
+model Service {
+  id           String        @id @default(cuid())
+  slug         String        @unique @db.VarChar(191)
+  title        String        @db.VarChar(191)
+  tagline      String?       @db.VarChar(255)
+  excerpt      String        @db.Text
+  icon         String?       @db.VarChar(64)
+  overview     String?       @db.Text
+  challenges   Json? // string[]
+  solution     String?       @db.Text
+  features     Json? // {title, description}[]
+  technologies Json? // string[]
+  benefits     Json? // string[]
+  process      Json? // {title, description}[]
+  coverImageId String?
+  status       ContentStatus @default(DRAFT)
+  isFeatured   Boolean       @default(false)
+  sortOrder    Int           @default(0)
+  publishedAt  DateTime?
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  deletedAt    DateTime?
+
+  coverImage Media?           @relation(fields: [coverImageId], references: [id], onDelete: Restrict)
+  faqs       FAQ[]
+  projects   ProjectService[]
+
+  @@index([status, sortOrder])
+  @@index([deletedAt])
+}
+
+model Solution {
+  id            String        @id @default(cuid())
+  slug          String        @unique @db.VarChar(191)
+  title         String        @db.VarChar(191)
+  tagline       String?       @db.VarChar(255)
+  excerpt       String        @db.Text
+  icon          String?       @db.VarChar(64)
+  overview      String?       @db.Text
+  modules       Json? // {title, description}[]
+  customization String?       @db.Text
+  benefits      Json? // string[]
+  technologies  Json? // string[]
+  coverImageId  String?
+  status        ContentStatus @default(DRAFT)
+  isFeatured    Boolean       @default(false)
+  sortOrder     Int           @default(0)
+  publishedAt   DateTime?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+  deletedAt     DateTime?
+
+  coverImage Media? @relation(fields: [coverImageId], references: [id], onDelete: Restrict)
+  faqs       FAQ[]
+
+  @@index([status, sortOrder])
+  @@index([deletedAt])
+}
+
+model Industry {
+  id           String        @id @default(cuid())
+  slug         String        @unique @db.VarChar(191)
+  title        String        @db.VarChar(191)
+  excerpt      String        @db.Text
+  icon         String?       @db.VarChar(64)
+  overview     String?       @db.Text
+  challenges   Json? // string[]
+  approach     Json? // {title, description}[]
+  coverImageId String?
+  status       ContentStatus @default(DRAFT)
+  sortOrder    Int           @default(0)
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  deletedAt    DateTime?
+
+  coverImage Media?    @relation(fields: [coverImageId], references: [id], onDelete: Restrict)
+  projects   Project[]
+
+  @@index([status, sortOrder])
+  @@index([deletedAt])
+}
+
+// ─────────────────────────────────────────────────────────────
+// Portfolio
+// ─────────────────────────────────────────────────────────────
+
+model ProjectCategory {
+  id        String   @id @default(cuid())
+  slug      String   @unique @db.VarChar(191)
+  name      String   @db.VarChar(120)
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  projects Project[]
+}
+
+model Project {
+  id           String        @id @default(cuid())
+  slug         String        @unique @db.VarChar(191)
+  title        String        @db.VarChar(191)
+  summary      String        @db.Text
+  description  String?       @db.LongText
+  clientName   String?       @db.VarChar(191)
+  industryId   String?
+  categoryId   String?
+  technologies Json? // string[]
+  challenges   String?       @db.Text
+  solutions    String?       @db.Text
+  results      String?       @db.Text
+  projectUrl   String?       @db.VarChar(512)
+  coverImageId String?
+  isDemo       Boolean       @default(false)
+  isFeatured   Boolean       @default(false)
+  status       ContentStatus @default(DRAFT)
+  sortOrder    Int           @default(0)
+  publishedAt  DateTime?
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  deletedAt    DateTime?
+
+  industry   Industry?        @relation(fields: [industryId], references: [id], onDelete: SetNull)
+  category   ProjectCategory? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  coverImage Media?           @relation(fields: [coverImageId], references: [id], onDelete: Restrict)
+  images     ProjectImage[]
+  services   ProjectService[]
+
+  @@index([status, isFeatured, sortOrder])
+  @@index([categoryId])
+  @@index([industryId])
+  @@index([deletedAt])
+}
+
+model ProjectImage {
+  id        String  @id @default(cuid())
+  projectId String
+  mediaId   String
+  caption   String? @db.VarChar(255)
+  sortOrder Int     @default(0)
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  media   Media   @relation(fields: [mediaId], references: [id], onDelete: Restrict)
+
+  @@index([projectId, sortOrder])
+  @@index([mediaId])
+}
+
+model ProjectService {
+  projectId String
+  serviceId String
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  service Service @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+
+  @@id([projectId, serviceId])
+  @@index([serviceId])
+}
+
+// ─────────────────────────────────────────────────────────────
+// Team
+// ─────────────────────────────────────────────────────────────
+
+model TeamMember {
+  id           String        @id @default(cuid())
+  slug         String        @unique @db.VarChar(191)
+  name         String        @db.VarChar(160)
+  position     String        @db.VarChar(160)
+  department   String        @db.VarChar(120)
+  bio          String?       @db.Text
+  skills       Json? // string[]
+  photoId      String?
+  linkedinUrl  String?       @db.VarChar(512)
+  githubUrl    String?       @db.VarChar(512)
+  twitterUrl   String?       @db.VarChar(512)
+  email        String?       @db.VarChar(191)
+  experience   String?       @db.VarChar(60)
+  phone        String?       @db.VarChar(40)
+  whatsapp     String?       @db.VarChar(40)
+  facebookUrl  String?       @db.VarChar(512)
+  instagramUrl String?       @db.VarChar(512)
+  websiteUrl   String?       @db.VarChar(512)
+  /// Show email, phone and WhatsApp on the public site
+  showContact  Boolean       @default(false)
+  status       ContentStatus @default(DRAFT)
+  sortOrder    Int           @default(0)
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  deletedAt    DateTime?
+
+  photo Media? @relation(fields: [photoId], references: [id], onDelete: Restrict)
+
+  @@index([status, sortOrder])
+}
+
+// ─────────────────────────────────────────────────────────────
+// Blog
+// ─────────────────────────────────────────────────────────────
+
+model BlogCategory {
+  id          String   @id @default(cuid())
+  slug        String   @unique @db.VarChar(191)
+  name        String   @db.VarChar(120)
+  description String?  @db.Text
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  posts BlogPost[]
+}
+
+model BlogTag {
+  id        String   @id @default(cuid())
+  slug      String   @unique @db.VarChar(191)
+  name      String   @db.VarChar(120)
+  createdAt DateTime @default(now())
+
+  posts BlogPostTag[]
+}
+
+model BlogPost {
+  id             String        @id @default(cuid())
+  slug           String        @unique @db.VarChar(191)
+  title          String        @db.VarChar(255)
+  excerpt        String        @db.Text
+  content        String        @db.LongText // sanitized HTML
+  coverImageId   String?
+  categoryId     String?
+  authorId       String?
+  readingMinutes Int           @default(1)
+  isFeatured     Boolean       @default(false)
+  status         ContentStatus @default(DRAFT)
+  publishedAt    DateTime?
+  scheduledFor   DateTime?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+  deletedAt      DateTime?
+
+  coverImage Media?        @relation(fields: [coverImageId], references: [id], onDelete: Restrict)
+  category   BlogCategory? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  author     User?         @relation("PostAuthor", fields: [authorId], references: [id], onDelete: SetNull)
+  tags       BlogPostTag[]
+
+  @@index([status, publishedAt])
+  @@index([categoryId])
+  @@index([scheduledFor])
+  @@index([deletedAt])
+}
+
+model BlogPostTag {
+  postId String
+  tagId  String
+
+  post BlogPost @relation(fields: [postId], references: [id], onDelete: Cascade)
+  tag  BlogTag  @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([postId, tagId])
+  @@index([tagId])
+}
+
+// ─────────────────────────────────────────────────────────────
+// Social proof & FAQ
+// ─────────────────────────────────────────────────────────────
+
+model Testimonial {
+  id          String        @id @default(cuid())
+  authorName  String        @db.VarChar(160)
+  authorTitle String?       @db.VarChar(160)
+  company     String?       @db.VarChar(160)
+  quote       String        @db.Text
+  rating      Int?
+  avatarId    String?
+  status      ContentStatus @default(DRAFT)
+  sortOrder   Int           @default(0)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  avatar Media? @relation(fields: [avatarId], references: [id], onDelete: Restrict)
+
+  @@index([status, sortOrder])
+}
+
+model FAQ {
+  id         String        @id @default(cuid())
+  question   String        @db.VarChar(500)
+  answer     String        @db.Text
+  scope      String        @default("general") @db.VarChar(32) // general | service | solution
+  serviceId  String?
+  solutionId String?
+  status     ContentStatus @default(PUBLISHED)
+  sortOrder  Int           @default(0)
+  createdAt  DateTime      @default(now())
+  updatedAt  DateTime      @updatedAt
+
+  service  Service?  @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  solution Solution? @relation(fields: [solutionId], references: [id], onDelete: Cascade)
+
+  @@index([scope, status, sortOrder])
+  @@index([serviceId])
+  @@index([solutionId])
+}
+
+// ─────────────────────────────────────────────────────────────
+// Navigation, settings, SEO, redirects
+// ─────────────────────────────────────────────────────────────
+
+model Navigation {
+  id        String   @id @default(cuid())
+  key       String   @unique @db.VarChar(64) // header, footer-company, footer-services…
+  name      String   @db.VarChar(120)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  items NavigationItem[]
+}
+
+model NavigationItem {
+  id           String   @id @default(cuid())
+  navigationId String
+  parentId     String?
+  label        String   @db.VarChar(120)
+  href         String   @db.VarChar(512)
+  isExternal   Boolean  @default(false)
+  isEnabled    Boolean  @default(true)
+  sortOrder    Int      @default(0)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  navigation Navigation       @relation(fields: [navigationId], references: [id], onDelete: Cascade)
+  parent     NavigationItem?  @relation("NavTree", fields: [parentId], references: [id], onDelete: Cascade)
+  children   NavigationItem[] @relation("NavTree")
+
+  @@index([navigationId, parentId, sortOrder])
+}
+
+model SiteSetting {
+  key       String   @id @db.VarChar(100)
+  value     Json
+  group     String   @db.VarChar(64)
+  isPublic  Boolean  @default(true)
+  updatedAt DateTime @updatedAt
+
+  @@index([group])
+}
+
+model SEO {
+  id              String   @id @default(cuid())
+  path            String   @unique @db.VarChar(255) // e.g. "/", "/services/ai-integration"
+  metaTitle       String?  @db.VarChar(255)
+  metaDescription String?  @db.VarChar(500)
+  keywords        String?  @db.VarChar(500)
+  canonicalUrl    String?  @db.VarChar(512)
+  ogImageUrl      String?  @db.VarChar(512)
+  noIndex         Boolean  @default(false)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+model Redirect {
+  id         String   @id @default(cuid())
+  fromPath   String   @unique @db.VarChar(255)
+  toPath     String   @db.VarChar(512)
+  statusCode Int      @default(301)
+  isEnabled  Boolean  @default(true)
+  hits       Int      @default(0)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+}
+
+model Translation {
+  id         String   @id @default(cuid())
+  entityType String   @db.VarChar(64) // service, solution, page_section, setting…
+  entityId   String   @db.VarChar(191)
+  field      String   @db.VarChar(64)
+  locale     String   @db.VarChar(10) // en, bn
+  value      String   @db.LongText
+  updatedAt  DateTime @updatedAt
+
+  @@unique([entityType, entityId, field, locale])
+  @@index([locale, entityType])
+}
+
+// ─────────────────────────────────────────────────────────────
+// Leads & newsletter
+// ─────────────────────────────────────────────────────────────
+
+model ContactInquiry {
+  id               String        @id @default(cuid())
+  name             String        @db.VarChar(160)
+  email            String        @db.VarChar(191)
+  phone            String?       @db.VarChar(40)
+  company          String?       @db.VarChar(191)
+  serviceInterest  String?       @db.VarChar(191)
+  budgetRange      String?       @db.VarChar(64)
+  message          String        @db.Text
+  preferredContact ContactMethod @default(EMAIL)
+  consentAt        DateTime
+  status           LeadStatus    @default(NEW)
+  assignedToId     String?
+  source           String?       @db.VarChar(120)
+  ipHash           String?       @db.VarChar(128)
+  userAgent        String?       @db.VarChar(255)
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+  deletedAt        DateTime?
+
+  assignedTo User?      @relation("LeadAssignee", fields: [assignedToId], references: [id], onDelete: SetNull)
+  notes      LeadNote[]
+
+  @@index([status, createdAt])
+  @@index([assignedToId])
+  @@index([email])
+}
+
+model LeadNote {
+  id        String   @id @default(cuid())
+  inquiryId String
+  authorId  String?
+  kind      String   @default("note") @db.VarChar(32) // note | status_change | reply | assignment
+  body      String   @db.Text
+  createdAt DateTime @default(now())
+
+  inquiry ContactInquiry @relation(fields: [inquiryId], references: [id], onDelete: Cascade)
+  author  User?          @relation(fields: [authorId], references: [id], onDelete: SetNull)
+
+  @@index([inquiryId, createdAt])
+}
+
+model NewsletterSubscriber {
+  id               String           @id @default(cuid())
+  email            String           @unique @db.VarChar(191)
+  status           SubscriberStatus @default(SUBSCRIBED)
+  unsubscribeToken String           @unique @db.VarChar(64)
+  source           String?          @db.VarChar(120)
+  consentAt        DateTime
+  unsubscribedAt   DateTime?
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+
+  @@index([status])
+}
+
+// ─────────────────────────────────────────────────────────────
+// Audit & analytics
+// ─────────────────────────────────────────────────────────────
+
+model ActivityLog {
+  id         String   @id @default(cuid())
+  userId     String?
+  action     String   @db.VarChar(64) // create, update, delete, publish, login…
+  entityType String   @db.VarChar(64)
+  entityId   String?  @db.VarChar(191)
+  summary    String?  @db.VarChar(500)
+  meta       Json?
+  ip         String?  @db.VarChar(64)
+  createdAt  DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([createdAt])
+  @@index([entityType, entityId])
+  @@index([userId])
+}
+
+model AnalyticsEvent {
+  id        String   @id @default(cuid())
+  type      String   @db.VarChar(64) // page_view, cta_click…
+  path      String   @db.VarChar(255)
+  referrer  String?  @db.VarChar(512)
+  sessionId String?  @db.VarChar(64)
+  meta      Json?
+  createdAt DateTime @default(now())
+
+  @@index([type, createdAt])
+  @@index([path, createdAt])
+}
