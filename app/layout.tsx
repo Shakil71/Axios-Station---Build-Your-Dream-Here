@@ -4,6 +4,7 @@ import "./globals.css";
 import { getSettings } from "@/services/public";
 import { str } from "@/lib/settings-schema";
 import { siteUrl } from "@/lib/utils";
+import { Analytics } from "@vercel/analytics/next";
 
 const sans = Manrope({ subsets: ["latin"], variable: "--font-sans-family", display: "swap" });
 // Bengali glyphs: the browser only downloads this font when Bengali text is on the page (unicode-range).
@@ -51,7 +52,10 @@ export default async function RootLayout({ children }: { children: React.ReactNo
       <head>
         <script dangerouslySetInnerHTML={{ __html: themeScript }} />
       </head>
-      <body className="min-h-dvh">{children}</body>
+      <body className="min-h-dvh">
+        {children}
+        <Analytics />
+      </body>
     </html>
   );
 }
